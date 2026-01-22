@@ -11,7 +11,9 @@ import {
 	type INodeTypeDescription,
 	type ISupplyDataFunctions,
 	type SupplyData,
+	ApplicationError,
 } from 'n8n-workflow';
+import { getSystemCredentials } from 'n8n-nodes-base/dist/credentials/common/aws/system-credentials-utils';
 
 export class EmbeddingsAwsBedrock implements INodeType {
 	description: INodeTypeDescription = {
@@ -109,19 +111,43 @@ export class EmbeddingsAwsBedrock implements INodeType {
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
 		const credentials = await this.getCredentials<{
 			region: string;
+			credentialType?: string;
 			secretAccessKey: string;
 			accessKeyId: string;
 			sessionToken: string;
+			temporaryCredentials?: boolean;
 		}>('aws');
 		const modelName = this.getNodeParameter('model', itemIndex) as string;
 
+		let awsCredentials: {
+			accessKeyId: string;
+			secretAccessKey: string;
+			sessionToken?: string;
+		};
+
+		if (credentials.credentialType === 'systemCredential') {
+			const systemCreds = await getSystemCredentials();
+			if (!systemCreds) {
+				throw new ApplicationError(
+					'No AWS system credentials found. Ensure credentials are available via environment variables, instance metadata, or container role.',
+				);
+			}
+			awsCredentials = {
+				accessKeyId: systemCreds.accessKeyId,
+				secretAccessKey: systemCreds.secretAccessKey,
+				sessionToken: systemCreds.sessionToken,
+			};
+		} else {
+			awsCredentials = {
+				accessKeyId: credentials.accessKeyId,
+				secretAccessKey: credentials.secretAccessKey,
+				sessionToken: credentials.sessionToken,
+			};
+		}
+
 		const clientConfig: BedrockRuntimeClientConfig = {
 			region: credentials.region,
-			credentials: {
-				secretAccessKey: credentials.secretAccessKey,
-				accessKeyId: credentials.accessKeyId,
-				sessionToken: credentials.sessionToken,
-			},
+			credentials: awsCredentials,
 		};
 
 		const proxyAgent = getNodeProxyAgent();

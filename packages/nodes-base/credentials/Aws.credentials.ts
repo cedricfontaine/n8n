@@ -4,6 +4,7 @@ import type {
 	IHttpRequestOptions,
 	INodeProperties,
 } from 'n8n-workflow';
+import { ApplicationError } from 'n8n-workflow';
 
 import type { AwsIamCredentialsType, AWSRegion } from './common/aws/types';
 import {
@@ -12,6 +13,7 @@ import {
 	signOptions,
 } from './common/aws/utils';
 import { awsCustomEndpoints, awsRegionProperty } from './common/aws/descriptions';
+import { getSystemCredentials } from './common/aws/system-credentials-utils';
 
 export class Aws implements ICredentialType {
 	name = 'aws';
@@ -25,10 +27,36 @@ export class Aws implements ICredentialType {
 	properties: INodeProperties[] = [
 		awsRegionProperty,
 		{
+			displayName: 'Credential Type',
+			name: 'credentialType',
+			type: 'options',
+			options: [
+				{
+					name: 'IAM Access Key',
+					value: 'accessKey',
+					description: 'Use IAM access key and secret key directly',
+				},
+				{
+					name: 'System Credentials',
+					value: 'systemCredential',
+					description: 'Use default credentials provider chain (env vars, instance metadata, etc.)',
+				},
+			],
+			default: 'accessKey',
+			displayOptions: {
+				hideOnCloud: true,
+			},
+		},
+		{
 			displayName: 'Access Key ID',
 			name: 'accessKeyId',
 			type: 'string',
 			default: '',
+			displayOptions: {
+				show: {
+					credentialType: ['accessKey'],
+				},
+			},
 		},
 		{
 			displayName: 'Secret Access Key',
@@ -38,6 +66,11 @@ export class Aws implements ICredentialType {
 			typeOptions: {
 				password: true,
 			},
+			displayOptions: {
+				show: {
+					credentialType: ['accessKey'],
+				},
+			},
 		},
 		{
 			displayName: 'Temporary Security Credentials',
@@ -45,6 +78,11 @@ export class Aws implements ICredentialType {
 			description: 'Support for temporary credentials from AWS STS',
 			type: 'boolean',
 			default: false,
+			displayOptions: {
+				show: {
+					credentialType: ['accessKey'],
+				},
+			},
 		},
 		{
 			displayName: 'Session Token',
@@ -53,6 +91,7 @@ export class Aws implements ICredentialType {
 			displayOptions: {
 				show: {
 					temporaryCredentials: [true],
+					credentialType: ['accessKey'],
 				},
 			},
 			default: '',
@@ -87,13 +126,33 @@ export class Aws implements ICredentialType {
 			region,
 		);
 
-		const securityHeaders = {
-			accessKeyId: `${credentials.accessKeyId}`.trim(),
-			secretAccessKey: `${credentials.secretAccessKey}`.trim(),
-			sessionToken: credentials.temporaryCredentials
-				? `${credentials.sessionToken}`.trim()
-				: undefined,
+		let securityHeaders: {
+			accessKeyId: string;
+			secretAccessKey: string;
+			sessionToken: string | undefined;
 		};
+
+		if (credentials.credentialType === 'systemCredential') {
+			const systemCreds = await getSystemCredentials();
+			if (!systemCreds) {
+				throw new ApplicationError(
+					'No AWS system credentials found. Ensure credentials are available via environment variables, instance metadata, or container role.',
+				);
+			}
+			securityHeaders = {
+				accessKeyId: systemCreds.accessKeyId,
+				secretAccessKey: systemCreds.secretAccessKey,
+				sessionToken: systemCreds.sessionToken,
+			};
+		} else {
+			securityHeaders = {
+				accessKeyId: `${credentials.accessKeyId}`.trim(),
+				secretAccessKey: `${credentials.secretAccessKey}`.trim(),
+				sessionToken: credentials.temporaryCredentials
+					? `${credentials.sessionToken}`.trim()
+					: undefined,
+			};
+		}
 
 		return signOptions(requestOptions, signOpts, securityHeaders, url, method);
 	}
