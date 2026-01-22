@@ -10,7 +10,9 @@ import {
 	type INodeTypeDescription,
 	type ISupplyDataFunctions,
 	type SupplyData,
+	ApplicationError,
 } from 'n8n-workflow';
+import { getSystemCredentials } from 'n8n-nodes-base/dist/credentials/common/aws/system-credentials-utils';
 
 import { makeN8nLlmFailedAttemptHandler } from '../n8nLlmFailedAttemptHandler';
 import { N8nLlmTracing } from '../N8nLlmTracing';
@@ -226,6 +228,7 @@ export class LmChatAwsBedrock implements INodeType {
 	async supplyData(this: ISupplyDataFunctions, itemIndex: number): Promise<SupplyData> {
 		const credentials = await this.getCredentials<{
 			region: string;
+			credentialType?: string;
 			secretAccessKey: string;
 			accessKeyId: string;
 			sessionToken: string;
@@ -236,15 +239,37 @@ export class LmChatAwsBedrock implements INodeType {
 			maxTokensToSample: number;
 		};
 
+		let awsCredentials: {
+			accessKeyId: string;
+			secretAccessKey: string;
+			sessionToken?: string;
+		};
+
+		if (credentials.credentialType === 'systemCredential') {
+			const systemCreds = await getSystemCredentials();
+			if (!systemCreds) {
+				throw new ApplicationError(
+					'No AWS system credentials found. Ensure credentials are available via environment variables, instance metadata, or container role.',
+				);
+			}
+			awsCredentials = {
+				accessKeyId: systemCreds.accessKeyId,
+				secretAccessKey: systemCreds.secretAccessKey,
+				sessionToken: systemCreds.sessionToken,
+			};
+		} else {
+			awsCredentials = {
+				accessKeyId: credentials.accessKeyId,
+				secretAccessKey: credentials.secretAccessKey,
+				...(credentials.sessionToken && { sessionToken: credentials.sessionToken }),
+			};
+		}
+
 		// We set-up client manually to pass httpAgent and httpsAgent
 		const proxyAgent = getNodeProxyAgent();
 		const clientConfig: BedrockRuntimeClientConfig = {
 			region: credentials.region,
-			credentials: {
-				secretAccessKey: credentials.secretAccessKey,
-				accessKeyId: credentials.accessKeyId,
-				...(credentials.sessionToken && { sessionToken: credentials.sessionToken }),
-			},
+			credentials: awsCredentials,
 		};
 
 		if (proxyAgent) {
