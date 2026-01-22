@@ -12,10 +12,11 @@ import type {
 	IHttpRequestMethods,
 	IRequestOptions,
 } from 'n8n-workflow';
-import { NodeApiError } from 'n8n-workflow';
+import { ApplicationError, NodeApiError } from 'n8n-workflow';
 import { URL } from 'url';
 import { parseString } from 'xml2js';
 import { getAwsCredentials } from '../GenericFunctions';
+import { getSystemCredentials } from '../../../credentials/common/aws/system-credentials-utils';
 
 function getEndpointForService(
 	service: string,
@@ -153,13 +154,34 @@ export async function validateCredentials(
 		method: 'POST',
 		path: '?Action=GetCallerIdentity&Version=2011-06-15',
 	} as Request;
-	const securityHeaders = {
-		accessKeyId: `${credentials.accessKeyId}`.trim(),
-		secretAccessKey: `${credentials.secretAccessKey}`.trim(),
-		sessionToken: credentials.temporaryCredentials
-			? `${credentials.sessionToken}`.trim()
-			: undefined,
+
+	let securityHeaders: {
+		accessKeyId: string;
+		secretAccessKey: string;
+		sessionToken: string | undefined;
 	};
+
+	if (credentials.credentialType === 'systemCredential') {
+		const systemCreds = await getSystemCredentials();
+		if (!systemCreds) {
+			throw new ApplicationError(
+				'No AWS system credentials found. Ensure credentials are available via environment variables, instance metadata, or container role.',
+			);
+		}
+		securityHeaders = {
+			accessKeyId: systemCreds.accessKeyId,
+			secretAccessKey: systemCreds.secretAccessKey,
+			sessionToken: systemCreds.sessionToken,
+		};
+	} else {
+		securityHeaders = {
+			accessKeyId: `${credentials.accessKeyId}`.trim(),
+			secretAccessKey: `${credentials.secretAccessKey}`.trim(),
+			sessionToken: credentials.temporaryCredentials
+				? `${credentials.sessionToken}`.trim()
+				: undefined,
+		};
+	}
 
 	sign(signOpts, securityHeaders);
 
